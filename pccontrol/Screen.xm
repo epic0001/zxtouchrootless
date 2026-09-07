@@ -169,8 +169,19 @@ OBJC_EXTERN UIImage *_UICreateScreenUIImage(void);
     IOSurfaceRef screenSurface = IOSurfaceCreate((__bridge CFDictionaryRef)(properties));
 
     properties = nil;
-    
-    IOSurfaceLock(screenSurface, 0, NULL);
+
+    if (!screenSurface) {
+        NSLog(@"com.zjx.springboard: Unable to create IOSurface for screenshot.");
+        return NULL;
+    }
+
+    kern_return_t lockResult = IOSurfaceLock(screenSurface, 0, NULL);
+    if (lockResult != KERN_SUCCESS) {
+        NSLog(@"com.zjx.springboard: Unable to lock screenshot IOSurface: %d", lockResult);
+        CFRelease(screenSurface);
+        return NULL;
+    }
+
     CARenderServerRenderDisplay(0, CFSTR("LCD"), screenSurface, 0, 0);
         
     CGImageRef cgImageRef = nil;
@@ -194,17 +205,20 @@ OBJC_EXTERN UIImage *_UICreateScreenUIImage(void);
             CGFloat degrees = -90.f;
             CGFloat radians = degrees * (M_PI / 180.f);
 
-            CGContextTranslateCTM (bitmap, 0.5*targetHeight, 0.5*targetWidth);
-            CGContextRotateCTM (bitmap, radians);
-            CGContextTranslateCTM (bitmap, -0.5*targetWidth, -0.5*targetHeight);
+            if (bitmap) {
+                CGContextTranslateCTM (bitmap, 0.5*targetHeight, 0.5*targetWidth);
+                CGContextRotateCTM (bitmap, radians);
+                CGContextTranslateCTM (bitmap, -0.5*targetWidth, -0.5*targetHeight);
 
-            CGContextDrawImage(bitmap, CGRectMake(0, 0, targetWidth, targetHeight), cgImageRef);
-            
-            CGImageRelease(cgImageRef);
-            cgImageRef = CGBitmapContextCreateImage(bitmap);
+                CGContextDrawImage(bitmap, CGRectMake(0, 0, targetWidth, targetHeight), cgImageRef);
 
-            CGColorSpaceRelease(colorSpaceInfo);
-            CGContextRelease(bitmap);
+                CGImageRef rotatedImage = CGBitmapContextCreateImage(bitmap);
+                if (rotatedImage) {
+                    CGImageRelease(cgImageRef);
+                    cgImageRef = rotatedImage;
+                }
+                CGContextRelease(bitmap);
+            }
         }
     }
     IOSurfaceUnlock(screenSurface, 0, NULL);

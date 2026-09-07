@@ -1,6 +1,6 @@
 Package: com.zjx.appdelegate
 Name: ZXTouch-appdelegate
-Version: 0.1.7
+Version: 0.1.8
 Depends: mobilesubstrate | ellekit, firmware (>= 15.0)
 Architecture: iphoneos-arm64
 Description: A component of zxtouch inside apps that works for zxtouch

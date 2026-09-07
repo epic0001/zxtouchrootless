@@ -10,8 +10,78 @@ from zxtouch import colorsearchtasktypes
 class zxtouch:
     def __init__(self, ip):
         self.s = socket.socket()
+        self._recv_buffer = bytearray()
         self.s.connect((str(ip), 6000))
         time.sleep(0.1)
+
+    def _recv_line(self):
+        """Receive one CRLF-terminated protocol line without losing extra bytes."""
+        delimiter = b"\r\n"
+        while True:
+            delimiter_index = self._recv_buffer.find(delimiter)
+            if delimiter_index >= 0:
+                line_end = delimiter_index + len(delimiter)
+                line = bytes(self._recv_buffer[:line_end])
+                del self._recv_buffer[:line_end]
+                return line
+
+            chunk = self.s.recv(4096)
+            if not chunk:
+                raise ConnectionError("ZXTouch connection closed before a complete response header was received")
+            self._recv_buffer.extend(chunk)
+            if len(self._recv_buffer) > 1024 * 1024:
+                raise RuntimeError("ZXTouch response header exceeds 1 MiB")
+
+    def _recv_exact(self, size):
+        """Receive exactly size bytes, preserving any following response bytes."""
+        if size < 0:
+            raise ValueError("size must not be negative")
+
+        while len(self._recv_buffer) < size:
+            remaining = size - len(self._recv_buffer)
+            chunk = self.s.recv(remaining)
+            if not chunk:
+                raise ConnectionError(
+                    "ZXTouch connection closed after {}/{} screenshot bytes".format(
+                        len(self._recv_buffer), size
+                    )
+                )
+            self._recv_buffer.extend(chunk)
+
+        data = bytes(self._recv_buffer[:size])
+        del self._recv_buffer[:size]
+        return data
+
+    def _recv_response(self):
+        return datahandler.decode_socket_data(self._recv_line())
+
+    def screenshot(self) -> bytes:
+        """Capture the current screen and return its raw JPEG bytes over TCP."""
+        self.s.sendall(datahandler.format_socket_data(tasktypes.TASK_SCREENSHOT))
+
+        header = self._recv_line()[:-2]
+        fields = header.split(b";;")
+        if not fields or fields[0] != b"0":
+            error_message = "Unknown screenshot error"
+            if len(fields) >= 2 and fields[1]:
+                error_message = fields[1].decode("utf-8", errors="replace")
+            raise RuntimeError("ZXTouch screenshot failed: {}".format(error_message))
+
+        if len(fields) != 3:
+            raise RuntimeError("Malformed ZXTouch screenshot response header")
+
+        try:
+            content_type = fields[1].decode("ascii")
+            content_length = int(fields[2].decode("ascii"))
+        except (UnicodeDecodeError, ValueError) as error:
+            raise RuntimeError("Malformed ZXTouch screenshot response header") from error
+
+        if content_type != "image/jpeg":
+            raise RuntimeError("Unexpected ZXTouch screenshot content type: {}".format(content_type))
+        if content_length <= 0:
+            raise RuntimeError("Invalid ZXTouch screenshot content length: {}".format(content_length))
+
+        return self._recv_exact(content_length)
 
     def touch(self, type, finger_index, x, y):
         """Perform a touch event
@@ -53,7 +123,7 @@ class zxtouch:
         result_tuple[1]: error info if result_tuple[0] == False. Otherwise ""
         """
         self.s.send(datahandler.format_socket_data(tasktypes.TASK_PROCESS_BRING_FOREGROUND, bundle_identifier))
-        return datahandler.decode_socket_data(self.s.recv(1024))
+        return self._recv_response()
 
     def show_alert_box(self, title, content, duration):
         """Show alert box on device
@@ -67,7 +137,7 @@ class zxtouch:
             Result tuple: (success?, error_message/return value)
         """
         self.s.send(datahandler.format_socket_data(tasktypes.TASK_SHOW_ALERT_BOX, title, content, duration))
-        return datahandler.decode_socket_data(self.s.recv(1024))
+        return self._recv_response()
 
     def run_shell_command(self, command):
         """Run shell command on device as root
@@ -76,7 +146,7 @@ class zxtouch:
         :return: Result tuple: (success?, error_message/return value)
         """
         self.s.send(datahandler.format_socket_data(tasktypes.TASK_RUN_SHELL, command))
-        return datahandler.decode_socket_data(self.s.recv(1024))
+        return self._recv_response()
 
     def prompt_input(self, title="ZXTouch", message="", placeholder="", default_value=""):
         """Ask the user for text using a native alert.
@@ -85,7 +155,7 @@ class zxtouch:
             Result tuple: (success?, entered_text/error_message)
         """
         self.s.send(datahandler.format_socket_data(tasktypes.TASK_PROMPT_INPUT, title, message, placeholder, default_value))
-        result = datahandler.decode_socket_data(self.s.recv(2048))
+        result = self._recv_response()
         if not result[0]:
             return False, result[1]
         return True, result[1][0] if len(result[1]) else ""
@@ -96,7 +166,7 @@ class zxtouch:
         :return: Result tuple: (success?, error_message/return value)
         """
         self.s.send(datahandler.format_socket_data(tasktypes.TASK_TOUCH_RECORDING_START))
-        return datahandler.decode_socket_data(self.s.recv(1024))
+        return self._recv_response()
 
     def stop_touch_recording(self):
         """Stop recording touch events
@@ -104,7 +174,7 @@ class zxtouch:
         :return: Result tuple: (success?, error_message/return value)
         """
         self.s.send(datahandler.format_socket_data(tasktypes.TASK_TOUCH_RECORDING_STOP))
-        return datahandler.decode_socket_data(self.s.recv(1024))
+        return self._recv_response()
 
     def accurate_usleep(self, microseconds):
         """Don't know why, but python on ios will not sleep accurately sometimes. So you can use this to sleep
@@ -113,7 +183,7 @@ class zxtouch:
         :return: Result tuple: (success?, error_message/return value)
         """
         self.s.send(datahandler.format_socket_data(tasktypes.TASK_USLEEP, microseconds))
-        return datahandler.decode_socket_data(self.s.recv(1024))
+        return self._recv_response()
 
     def play_script(self, script_absolute_path):
         """Play a script
@@ -122,12 +192,12 @@ class zxtouch:
         :return: Result tuple: (success?, error_message/return value)
         """
         self.s.send(datahandler.format_socket_data(tasktypes.TASK_PLAY_SCRIPT, script_absolute_path))
-        return datahandler.decode_socket_data(self.s.recv(1024))
+        return self._recv_response()
 
     def force_stop_script_play(self):
         """Force stopping playing current script"""
         self.s.send(datahandler.format_socket_data(tasktypes.TASK_PLAY_SCRIPT_FORCE_STOP))
-        return datahandler.decode_socket_data(self.s.recv(1024))
+        return self._recv_response()
 
     def image_match(self, template_path, acceptable_value=0.8, max_try_times=2, scaleRation=0.8):
         """Get the coordinate of a image
@@ -141,7 +211,7 @@ class zxtouch:
         """
         self.s.send(datahandler.format_socket_data(tasktypes.TASK_TEMPLATE_MATCH, template_path, max_try_times,
                                                    acceptable_value, scaleRation))
-        result = datahandler.decode_socket_data(self.s.recv(1024))
+        result = self._recv_response()
         if not result[0]:
             return False, result[1]
 
@@ -158,7 +228,7 @@ class zxtouch:
         """
         self.s.send(datahandler.format_socket_data(tasktypes.TASK_SHOW_TOAST, toast_type, content, duration, position,
                                                    fontSize))
-        return datahandler.decode_socket_data(self.s.recv(1024))
+        return self._recv_response()
 
     def pick_color(self, x, y):
         """Get the rgb value from the screen. The format returned is (red, green, blue)
@@ -168,7 +238,7 @@ class zxtouch:
         :return: Result tuple: (success?, error_message/dictionary that stores the result)
         """
         self.s.send(datahandler.format_socket_data(tasktypes.TASK_COLOR_PICKER, x, y))
-        result = datahandler.decode_socket_data(self.s.recv(1024))
+        result = self._recv_response()
         if not result[0]:
             return False, result[1]
 
@@ -199,7 +269,7 @@ class zxtouch:
             return
 
         self.s.send(datahandler.format_socket_data(tasktypes.TASK_COLOR_SEARCHER, colorsearchtasktypes.SEARCH_RGB_SINGLE_POINT, region[0], region[1], region[2], region[3], red_min, red_max, green_min, green_max, blue_min, blue_max, pixel_to_skip))
-        result = datahandler.decode_socket_data(self.s.recv(1024))
+        result = self._recv_response()
         if not result[0]:
             return False, result[1]
 
@@ -214,7 +284,7 @@ class zxtouch:
         """
         self.s.send(
             datahandler.format_socket_data(tasktypes.TASK_KEYBOARDIMPL, kbdtasktypes.KEYBOARD_VIRTUAL_KEYBOARD, 2))
-        return datahandler.decode_socket_data(self.s.recv(1024))
+        return self._recv_response()
 
     def hide_keyboard(self):
         """hide the keyboard
@@ -223,7 +293,7 @@ class zxtouch:
         """
         self.s.send(
             datahandler.format_socket_data(tasktypes.TASK_KEYBOARDIMPL, kbdtasktypes.KEYBOARD_VIRTUAL_KEYBOARD, 1))
-        return datahandler.decode_socket_data(self.s.recv(1024))
+        return self._recv_response()
 
     def paste_from_clipboard(self):
         """paste text from clip board
@@ -232,7 +302,7 @@ class zxtouch:
         """
         self.s.send(
             datahandler.format_socket_data(tasktypes.TASK_KEYBOARDIMPL, kbdtasktypes.KEYBOARD_PASTE_FROM_CLIPBOARD))
-        return datahandler.decode_socket_data(self.s.recv(1024))
+        return self._recv_response()
 
     def get_text_from_clipboard(self):
         """Get text from clip board
@@ -241,7 +311,7 @@ class zxtouch:
         """
         self.s.send(
             datahandler.format_socket_data(tasktypes.TASK_KEYBOARDIMPL, kbdtasktypes.KEYBOARD_GET_TEXT_FROM_CLIPBOARD))
-        result = datahandler.decode_socket_data(self.s.recv(1024))
+        result = self._recv_response()
         if not result[0]:
             return False, result[1]
         return True, result[1][0]
@@ -254,7 +324,7 @@ class zxtouch:
         """
         self.s.send(
             datahandler.format_socket_data(tasktypes.TASK_KEYBOARDIMPL, kbdtasktypes.KEYBOARD_SAVE_TEXT_TO_CLIPBOARD, text))
-        return datahandler.decode_socket_data(self.s.recv(1024))
+        return self._recv_response()
 
     def insert_text(self, text):
         """Insert text into the text field
@@ -267,11 +337,11 @@ class zxtouch:
                 self.s.send(
                     datahandler.format_socket_data(tasktypes.TASK_KEYBOARDIMPL, kbdtasktypes.KEYBOARD_DELETE_CHARACTERS,
                                                    1))
-                datahandler.decode_socket_data(self.s.recv(1024))
+                self._recv_response()
             else:
                 self.s.send(
                     datahandler.format_socket_data(tasktypes.TASK_KEYBOARDIMPL, kbdtasktypes.KEYBOARD_INSERT_TEXT, ch))
-                datahandler.decode_socket_data(self.s.recv(1024))
+                self._recv_response()
         return True, ""
 
 
@@ -283,7 +353,7 @@ class zxtouch:
         """
         self.s.send(
             datahandler.format_socket_data(tasktypes.TASK_KEYBOARDIMPL, kbdtasktypes.KEYBOARD_MOVE_CURSOR, offset))
-        return datahandler.decode_socket_data(self.s.recv(1024))
+        return self._recv_response()
 
     def get_screen_size(self):
         """Get screen size in pixels
@@ -292,7 +362,7 @@ class zxtouch:
         """
         self.s.send(datahandler.format_socket_data(tasktypes.TASK_GET_DEVICE_INFO,
                                                    deviceinfotasktypes.DEVICE_INFO_TASK_GET_SCREEN_SIZE))
-        result = datahandler.decode_socket_data(self.s.recv(1024))
+        result = self._recv_response()
         if not result[0]:
             return False, result[1]
         return True, {"width": result[1][0], "height": result[1][1]}
@@ -304,7 +374,7 @@ class zxtouch:
         """
         self.s.send(datahandler.format_socket_data(tasktypes.TASK_GET_DEVICE_INFO,
                                                    deviceinfotasktypes.DEVICE_INFO_TASK_GET_SCREEN_ORIENTATION))
-        result = datahandler.decode_socket_data(self.s.recv(1024))
+        result = self._recv_response()
         if not result[0]:
             return False, result[1]
         return True, result[1][0]
@@ -316,7 +386,7 @@ class zxtouch:
         """
         self.s.send(datahandler.format_socket_data(tasktypes.TASK_GET_DEVICE_INFO,
                                                    deviceinfotasktypes.DEVICE_INFO_TASK_GET_SCREEN_SCALE))
-        result = datahandler.decode_socket_data(self.s.recv(1024))
+        result = self._recv_response()
         if not result[0]:
             return False, result[1]
         return True, result[1][0]
@@ -328,7 +398,7 @@ class zxtouch:
         """
         self.s.send(datahandler.format_socket_data(tasktypes.TASK_GET_DEVICE_INFO,
                                                    deviceinfotasktypes.DEVICE_INFO_TASK_GET_DEVICE_INFO))
-        result = datahandler.decode_socket_data(self.s.recv(1024))
+        result = self._recv_response()
         if not result[0]:
             return False, result[1]
         return True, {"name": result[1][0], "system_name": result[1][1], "system_version": result[1][2],
@@ -337,7 +407,7 @@ class zxtouch:
     def get_battery_info(self):
         self.s.send(datahandler.format_socket_data(tasktypes.TASK_GET_DEVICE_INFO,
                                                    deviceinfotasktypes.DEVICE_INFO_TASK_GET_BATTERY_INFO))
-        result = datahandler.decode_socket_data(self.s.recv(1024))
+        result = self._recv_response()
         if not result[0]:
             return False, result[1]
         battery_state_return = int(result[1][0])
@@ -375,7 +445,7 @@ class zxtouch:
                                                    1, rect_data, custom_words_data, minimum_height, recognition_level,
                                                    languages_data, auto_correct, debug_image_path))
 
-        result = datahandler.decode_socket_data(self.s.recv(2048))
+        result = self._recv_response()
         if not result[0]:
             return False, result[1]
 
@@ -405,7 +475,7 @@ class zxtouch:
         self.s.send(datahandler.format_socket_data(tasktypes.TASK_TEXT_RECOGNIZER,
                                                    2, recognition_level))
 
-        result = datahandler.decode_socket_data(self.s.recv(1024))
+        result = self._recv_response()
         if not result[0]:
             return False, result[1]
 

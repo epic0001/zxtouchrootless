@@ -57,6 +57,28 @@ fi
 touch /var/mobile/Library/ZXTouch/coreutils/ScriptRuntime/output
 chown -R mobile:mobile /var/mobile/Library/ZXTouch
 
+# roothide has two views of /var/mobile: the real filesystem, and the one seen
+# through the jbroot. Everything above is created on the real filesystem, but
+# components that resolve paths through the jbroot look under
+# $(jbroot)/var/mobile/Library/ZXTouch, find nothing, and fail: scripts do not
+# play (python exits 2, "cannot open file"), the runtime log reads empty, and the
+# script registry is missing. Point the jbroot view at the real directory so both
+# resolve to the same data.
+JB_ZX=$(jbroot /var/mobile/Library/ZXTouch)
+if [ -n "$JB_ZX" ] && [ "$JB_ZX" != "/var/mobile/Library/ZXTouch" ]; then
+    if [ -d "$JB_ZX" ] && [ ! -L "$JB_ZX" ]; then
+        # An earlier install left a real directory here. Preserve anything the
+        # user put in it before replacing it with the link.
+        cp -Rf "$JB_ZX/." /var/mobile/Library/ZXTouch/ 2>/dev/null || true
+        rm -rf "$JB_ZX"
+    fi
+    if [ ! -L "$JB_ZX" ]; then
+        mkdir -p "$(jbroot /var/mobile/Library)"
+        ln -s /var/mobile/Library/ZXTouch "$JB_ZX"
+    fi
+    chown -h mobile:mobile "$JB_ZX" 2>/dev/null || true
+fi
+
 # Point $(jbroot)/usr/bin/python3 at the newest working Procursus Python we can
 # find. We no longer ship a bundled Python 3.7 runtime — its libpython dylib
 # lives under /usr/lib on stock iOS which doesn't exist on roothide, so it aborts

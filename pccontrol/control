@@ -1,7 +1,7 @@
 Package: com.zjx.pccontrol
 Name: ZJXSimulateTouch
 Depends: mobilesubstrate | ellekit, firmware (>= 15.0)
-Version: 0.1.8
+Version: 0.1.9
 Architecture: iphoneos-arm64
 Description: iOS touch simulation library (rootless, iOS 15-16)
 Maintainer: Jason Z

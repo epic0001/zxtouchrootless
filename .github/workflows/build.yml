@@ -21,6 +21,9 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Run Python tests
+        run: python3 -m unittest discover -s tests -v
+
       - name: Build iOS App
         run: |
           set -o pipefail

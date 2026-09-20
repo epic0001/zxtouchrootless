@@ -180,6 +180,7 @@ device = zxtouch("127.0.0.1")  # use device IP for remote control
 | `start_touch_recording` / `stop_touch_recording` | Working |
 | `ocr` / `get_supported_ocr_languages` | Working |
 | `image_match` | Working (Accelerate.framework, no OpenCV) |
+| `screenshot` | Working (direct in-memory JPEG over TCP) |
 | `insert_text` / `show_keyboard` / `hide_keyboard` / `move_cursor` | Working (via appdelegate tweak) |
 
 ---
@@ -526,6 +527,36 @@ def get_screen_size():
         Result tuple. On success, result[1] is {"width", "height"}
     """
 ```
+
+---
+
+## Screenshot
+
+`screenshot()` returns the current display as raw JPEG bytes directly over the
+existing ZXTouch TCP connection. No file is created on the iOS device and SSH
+is not required. Pillow is optional and is only needed if your own code wants
+to decode the returned JPEG.
+
+```python
+from io import BytesIO
+
+from PIL import Image
+from zxtouch.client import zxtouch
+
+device = zxtouch("192.168.2.86")
+
+data = device.screenshot()
+
+image = Image.open(BytesIO(data))
+image.load()
+image.show()
+
+device.disconnect()
+```
+
+The wire response is `0;;image/jpeg;;<CONTENT_LENGTH>\r\n` followed immediately
+by exactly `CONTENT_LENGTH` raw JPEG bytes. Server errors remain text responses
+in the form `-1;;<message>\r\n`.
 
 ---
 

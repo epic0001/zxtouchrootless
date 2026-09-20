@@ -10,7 +10,7 @@ CFWriteStreamRef writeStreamRef = NULL;
 CFReadStreamRef readStreamRef = NULL;
 static NSMutableDictionary *socketClients = NULL;
 static NSMutableDictionary *socketClientBuffers = NULL;
-static dispatch_queue_t socketTaskQueue;
+static NSMutableDictionary *socketClientQueues = NULL;
 void report_memory(void);
 
 // Reference: https://www.jianshu.com/p/9353105a9129
@@ -50,7 +50,7 @@ void socketServer()
         
         socketClients = [[NSMutableDictionary alloc] init];
         socketClientBuffers = [[NSMutableDictionary alloc] init];
-        socketTaskQueue = dispatch_queue_create("com.zjx.springboard.socket-tasks", DISPATCH_QUEUE_SERIAL);
+        socketClientQueues = [[NSMutableDictionary alloc] init];
 
         NSLog(@"### com.zjx.springboard: connection waiting");
         CFRunLoopRef cfrunLoop = CFRunLoopGetCurrent();
@@ -64,64 +64,92 @@ void socketServer()
 
 }
 
-static void readStream(CFReadStreamRef readStream, CFStreamEventType eventype, void * clientCallBackInfo) 
+static void readStream(CFReadStreamRef readStream, CFStreamEventType eventype, void * clientCallBackInfo)
 {
+    // This callback and TCPServerAcceptCallBack both run on the socket server's
+    // run loop thread, so every access to the client dictionaries happens on one
+    // thread and needs no locking. Only the parsed command is handed off.
+    NSNumber *clientKey = @((long)readStream);
+
+    if (eventype == kCFStreamEventEndEncountered || eventype == kCFStreamEventErrorOccurred)
+    {
+        // The client disconnected. Drop its state, otherwise the dictionaries
+        // grow by one entry per connection for as long as SpringBoard runs.
+        [socketClients removeObjectForKey:clientKey];
+        [socketClientBuffers removeObjectForKey:clientKey];
+        [socketClientQueues removeObjectForKey:clientKey];
+
+        CFReadStreamSetClient(readStream, kCFStreamEventNone, NULL, NULL);
+        CFReadStreamUnscheduleFromRunLoop(readStream, CFRunLoopGetCurrent(), kCFRunLoopCommonModes);
+        CFReadStreamClose(readStream);
+        return;
+    }
+
     UInt8 readDataBuff[2048];
     CFIndex hasRead = CFReadStreamRead(readStream, readDataBuff, sizeof(readDataBuff));
     if (hasRead <= 0) {
         return;
     }
 
-    NSData *chunk = [NSData dataWithBytes:readDataBuff length:(NSUInteger)hasRead];
-    NSNumber *clientKey = @((long)readStream);
+    NSMutableData *pendingData = [socketClientBuffers objectForKey:clientKey];
+    if (!pendingData) {
+        pendingData = [NSMutableData data];
+        [socketClientBuffers setObject:pendingData forKey:clientKey];
+    }
+    [pendingData appendBytes:readDataBuff length:(NSUInteger)hasRead];
 
-    dispatch_async(socketTaskQueue, ^{
-        @autoreleasepool {
-            NSMutableData *pendingData = [socketClientBuffers objectForKey:clientKey];
-            if (!pendingData) {
-                pendingData = [NSMutableData data];
-                [socketClientBuffers setObject:pendingData forKey:clientKey];
+    // Each client gets its own serial queue. Commands from one client stay in
+    // order, but a slow task (a screenshot encode, OCR, or a sleep task) no
+    // longer blocks every other connection the way a single shared serial queue
+    // would.
+    dispatch_queue_t clientQueue = [socketClientQueues objectForKey:clientKey];
+    id writeStreamValue = [socketClients objectForKey:clientKey];
+    CFWriteStreamRef clientWriteStream =
+        (writeStreamValue != nil) ? (CFWriteStreamRef)[writeStreamValue longValue] : NULL;
+
+    while ([pendingData length] >= 2) {
+        const UInt8 *bytes = (const UInt8 *)[pendingData bytes];
+        NSUInteger commandLength = NSNotFound;
+        for (NSUInteger index = 0; index + 1 < [pendingData length]; index++) {
+            if (bytes[index] == '\r' && bytes[index + 1] == '\n') {
+                commandLength = index;
+                break;
             }
-            [pendingData appendData:chunk];
+        }
 
-            while ([pendingData length] >= 2) {
-                const UInt8 *bytes = (const UInt8 *)[pendingData bytes];
-                NSUInteger commandLength = NSNotFound;
-                for (NSUInteger index = 0; index + 1 < [pendingData length]; index++) {
-                    if (bytes[index] == '\r' && bytes[index + 1] == '\n') {
-                        commandLength = index;
-                        break;
-                    }
-                }
+        if (commandLength == NSNotFound) {
+            break;
+        }
 
-                if (commandLength == NSNotFound) {
-                    break;
-                }
+        NSData *commandData = [pendingData subdataWithRange:NSMakeRange(0, commandLength)];
+        [pendingData replaceBytesInRange:NSMakeRange(0, commandLength + 2)
+                               withBytes:NULL
+                                  length:0];
 
-                NSData *commandData = [pendingData subdataWithRange:NSMakeRange(0, commandLength)];
-                [pendingData replaceBytesInRange:NSMakeRange(0, commandLength + 2)
-                                       withBytes:NULL
-                                          length:0];
+        if ([commandData length] < 2) {
+            continue;
+        }
 
-                if ([commandData length] < 2) {
-                    continue;
-                }
+        NSMutableData *nullTerminatedCommand = [commandData mutableCopy];
+        const UInt8 terminator = 0;
+        [nullTerminatedCommand appendBytes:&terminator length:1];
 
-                NSMutableData *nullTerminatedCommand = [commandData mutableCopy];
-                const UInt8 terminator = 0;
-                [nullTerminatedCommand appendBytes:&terminator length:1];
-
-                id writeStreamValue = [socketClients objectForKey:clientKey];
-                if (writeStreamValue != nil) {
-                    processTask((UInt8 *)[nullTerminatedCommand mutableBytes],
-                                (CFWriteStreamRef)[writeStreamValue longValue]);
+        void (^runTask)(void) = ^{
+            @autoreleasepool {
+                if (clientWriteStream != NULL) {
+                    processTask((UInt8 *)[nullTerminatedCommand mutableBytes], clientWriteStream);
                 } else {
                     processTask((UInt8 *)[nullTerminatedCommand mutableBytes]);
                 }
             }
-        }
-    });
+        };
 
+        if (clientQueue != nil) {
+            dispatch_async(clientQueue, runTask);
+        } else {
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), runTask);
+        }
+    }
 }
 
 int notifyClientData(const UInt8 *data, CFIndex length, CFWriteStreamRef client)
@@ -131,15 +159,43 @@ int notifyClientData(const UInt8 *data, CFIndex length, CFWriteStreamRef client)
     }
 
     CFIndex totalWritten = 0;
+    int stalledAttempts = 0;
+    const int maxStalledAttempts = 2500;   // ~5 seconds at 2ms per attempt
+
     while (totalWritten < length) {
         CFIndex written = CFWriteStreamWrite(client, data + totalWritten, length - totalWritten);
-        if (written <= 0) {
-            CFStreamError error = CFWriteStreamGetError(client);
-            NSLog(@"com.zjx.springboard: socket write failed after %ld/%ld bytes (domain: %ld, error: %d)",
-                  (long)totalWritten, (long)length, (long)error.domain, (int)error.error);
-            return -1;
+
+        if (written > 0) {
+            totalWritten += written;
+            stalledAttempts = 0;
+            continue;
         }
-        totalWritten += written;
+
+        if (written == 0) {
+            // The stream cannot accept bytes at this instant. That is ordinary
+            // back-pressure rather than a failure, and it is routine when
+            // sending a payload as large as a screenshot. Returning here would
+            // abandon the transfer half sent, so wait briefly and retry.
+            CFStreamStatus status = CFWriteStreamGetStatus(client);
+            if (status == kCFStreamStatusError || status == kCFStreamStatusClosed ||
+                status == kCFStreamStatusNotOpen) {
+                NSLog(@"com.zjx.springboard: socket closed after %ld/%ld bytes (status %ld)",
+                      (long)totalWritten, (long)length, (long)status);
+                return -1;
+            }
+            if (++stalledAttempts > maxStalledAttempts) {
+                NSLog(@"com.zjx.springboard: socket write timed out after %ld/%ld bytes",
+                      (long)totalWritten, (long)length);
+                return -1;
+            }
+            usleep(2000);
+            continue;
+        }
+
+        CFStreamError error = CFWriteStreamGetError(client);
+        NSLog(@"com.zjx.springboard: socket write failed after %ld/%ld bytes (domain: %ld, error: %d)",
+              (long)totalWritten, (long)length, (long)error.domain, (int)error.error);
+        return -1;
     }
 
     return 0;
@@ -183,7 +239,10 @@ static void TCPServerAcceptCallBack(CFSocketRef socket, CFSocketCallBackType typ
             
             CFStreamClientContext context = {0, NULL, NULL, NULL };
 
-            if (!CFReadStreamSetClient(readStreamRef, kCFStreamEventHasBytesAvailable, readStream, &context)) {
+            CFOptionFlags streamEvents = kCFStreamEventHasBytesAvailable |
+                                         kCFStreamEventEndEncountered |
+                                         kCFStreamEventErrorOccurred;
+            if (!CFReadStreamSetClient(readStreamRef, streamEvents, readStream, &context)) {
                 NSLog(@"### com.zjx.springboard: error 1");
                 return;
             }
@@ -192,6 +251,12 @@ static void TCPServerAcceptCallBack(CFSocketRef socket, CFSocketCallBackType typ
 
 			[socketClients setObject:@((long)writeStreamRef) forKey:@((long)readStreamRef)];
             [socketClientBuffers setObject:[NSMutableData data] forKey:@((long)readStreamRef)];
+
+            dispatch_queue_t clientQueue =
+                dispatch_queue_create("com.zjx.springboard.socket-client", DISPATCH_QUEUE_SERIAL);
+            if (clientQueue) {
+                [socketClientQueues setObject:clientQueue forKey:@((long)readStreamRef)];
+            }
             //const char *str = "+++welcome++++\n";
             
             //CFWriteStreamWrite(writeStreamRef, (UInt8 *)str, strlen(str) + 1);	

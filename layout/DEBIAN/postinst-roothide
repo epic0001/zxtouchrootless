@@ -64,19 +64,39 @@ chown -R mobile:mobile /var/mobile/Library/ZXTouch
 # play (python exits 2, "cannot open file"), the runtime log reads empty, and the
 # script registry is missing. Point the jbroot view at the real directory so both
 # resolve to the same data.
-JB_ZX=$(jbroot /var/mobile/Library/ZXTouch)
-if [ -n "$JB_ZX" ] && [ "$JB_ZX" != "/var/mobile/Library/ZXTouch" ]; then
+REAL_ZX=/var/mobile/Library/ZXTouch
+JB_ZX=$(jbroot /var/mobile/Library/ZXTouch 2>/dev/null)
+
+# Probe first. If a marker written on the real side is already visible through
+# the jbroot, the two paths are the same directory and linking them would create
+# a symlink loop, so leave everything alone.
+SAME_DIR=0
+if [ -n "$JB_ZX" ] && [ "$JB_ZX" != "$REAL_ZX" ]; then
+    : > "$REAL_ZX/.zx-path-probe" 2>/dev/null || true
+    if [ -e "$JB_ZX/.zx-path-probe" ]; then
+        SAME_DIR=1
+    fi
+    rm -f "$REAL_ZX/.zx-path-probe" 2>/dev/null || true
+fi
+
+if [ -n "$JB_ZX" ] && [ "$JB_ZX" != "$REAL_ZX" ] && [ "$SAME_DIR" = "0" ]; then
     if [ -d "$JB_ZX" ] && [ ! -L "$JB_ZX" ]; then
         # An earlier install left a real directory here. Preserve anything the
         # user put in it before replacing it with the link.
-        cp -Rf "$JB_ZX/." /var/mobile/Library/ZXTouch/ 2>/dev/null || true
+        cp -Rf "$JB_ZX/." "$REAL_ZX/" 2>/dev/null || true
         rm -rf "$JB_ZX"
     fi
     if [ ! -L "$JB_ZX" ]; then
-        mkdir -p "$(jbroot /var/mobile/Library)"
-        ln -s /var/mobile/Library/ZXTouch "$JB_ZX"
+        mkdir -p "$(jbroot /var/mobile/Library)" 2>/dev/null || true
+        ln -s "$REAL_ZX" "$JB_ZX" 2>/dev/null || true
     fi
-    chown -h mobile:mobile "$JB_ZX" 2>/dev/null || true
+    # A link that does not resolve to a usable directory is worse than no link.
+    if [ -L "$JB_ZX" ] && [ ! -d "$JB_ZX/" ]; then
+        rm -f "$JB_ZX"
+        echo "ZXTouch: warning - could not bridge the jbroot data path; scripts may not play." >&2
+    else
+        chown -h mobile:mobile "$JB_ZX" 2>/dev/null || true
+    fi
 fi
 
 # Point $(jbroot)/usr/bin/python3 at the newest working Procursus Python we can

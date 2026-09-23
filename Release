@@ -6,13 +6,13 @@ Codename: ios
 Architectures: iphoneos-arm64 iphoneos-arm64e
 Components: main
 Description: ZXTouch Rootless - iOS 15-17 touch simulation
-Date: Sun, 30 Aug 2026 23:58:22 GMT
+Date: Wed, 23 Sep 2026 01:10:36 GMT
 MD5Sum:
- 615cca34ecbcb795078912d027ac8237 1442 Packages
- f99b995a04b56adfc2b20c5b2c370070 611 Packages.gz
+ 23d2dc52b35a6ec99c05e056b9c2153e 1442 Packages
+ 28f98d23686b693b519a99a42c84fa4f 612 Packages.gz
 SHA1:
- c2cf7f64bd99833ee97bf4fb55be54bfb17e5e2b 1442 Packages
- eaca1a6bacff5b7566168369d97afcfc047cc53e 611 Packages.gz
+ 9ffc4a9f2b6d3feff420a53b8ba531a29a0d19da 1442 Packages
+ 76829a45a90de816cae2519a6015cdc65b8eb731 612 Packages.gz
 SHA256:
- f70f06b88747b1a6d38e68ba750b1e1819f002ad583a806d007fc9b0e57fef71 1442 Packages
- 18997ff867ba85e47915d3398fad3dbed8be599904ec83db8da1a8a2b1c09478 611 Packages.gz
+ 8476726f70dd65962d484121244a13e34e48fd9e2b3209f7d4b6e833b472f9d1 1442 Packages
+ 952e7997edc6eb566d3db8376df48f03f8415b3bff96d18df54fccfdc12de6b6 612 Packages.gz

@@ -145,13 +145,16 @@ jobs:
             artifacts/*_rootless.deb
             artifacts/*_roothide.deb
           generate_release_notes: true
+          # Append, never replace. Release notes written by hand before tagging
+          # would otherwise be overwritten by this boilerplate.
+          append_body: true
           body: |
             ## ZXTouch Rootless
 
             | File | Jailbreak | iOS |
             |------|-----------|-----|
-            | `*_rootless.deb` | Dopamine | 15.0 – 16.6.1 |
-            | `*_roothide.deb` | Roothide / Serotonin | 15.0 – 16.6.1 |
+            | `*_rootless.deb` | Dopamine, Dopamine 3, NathanLR | 15.0 - 17.7 |
+            | `*_roothide.deb` | Roothide / Serotonin | 15.0 - 16.6.1 |
 
             ### Installation
             1. Download the `.deb` for your jailbreak

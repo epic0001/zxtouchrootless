@@ -391,7 +391,6 @@ Boolean init()
 
             initSenderId();
             startPopupListeningCallBack();
-            initTouchGetScreenSize();
             [@"5-sender-init" writeToFile:@"/var/mobile/d5.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
 
             if (!init()) { return; }

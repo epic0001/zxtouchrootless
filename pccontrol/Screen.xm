@@ -91,6 +91,28 @@ Get the size of the screen and set them.
     return [[UIScreen mainScreen] scale];
 }
 
++ (ZXScreenFrame)getScreenFrame
+{
+    __block ZXScreenFrame frame = {};
+    void (^readFrame)(void) = ^{
+        UIScreen *screen = [UIScreen mainScreen];
+        CGSize portrait = screen.fixedCoordinateSpace.bounds.size;
+        int orientation = [self getScreenOrientation];
+        if (orientation < ZXFrameUpright || orientation > ZXFrameRotatedRight) {
+            orientation = ZXFrameUpright;
+        }
+        frame = ZXScreenFrameForPortrait((int)lround(portrait.width * screen.scale),
+                                         (int)lround(portrait.height * screen.scale),
+                                         (ZXFrameRotation)orientation);
+    };
+    if ([NSThread isMainThread]) {
+        readFrame();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), readFrame);
+    }
+    return frame;
+}
+
 + (CGRect)getBounds
 {
     return [UIScreen mainScreen].bounds;
@@ -116,40 +138,23 @@ OBJC_EXTERN UIImage *_UICreateScreenUIImage(void);
 
 + (CGImageRef)createScreenShotCGImageRef
 {
-    Boolean isiPad8orUp = false;
-
-    CGFloat scale = [UIScreen mainScreen].scale;
-    CGSize screenSize = [UIScreen mainScreen].bounds.size;
-
-    int height = (int)(screenSize.height * scale);
-    int width = (int)(screenSize.width * scale);
-
-    // check whether it is ipad8 or later
-    NSString *searchText = getDeviceName();
-
-    NSRange range = [searchText rangeOfString:@"^iPad[8-9]|iPad[1-9][0-9]+" options:NSRegularExpressionSearch];
-    if (range.location != NSNotFound) { // ipad pro (3rd) or later
-        isiPad8orUp = true;
+    ZXScreenFrame frame = [self getScreenFrame];
+    if (frame.width <= 0 || frame.height <= 0) {
+        return NULL;
     }
 
-    if (isiPad8orUp)
-    {
-        if (width < height)
-        {
-            int temp = width;
-            width = height;
-            height = temp;
-        }
-    }
-    else
-    {
-        if (width > height)
-        {
-            int temp = width;
-            width = height;
-            height = temp;
-        }
-    }
+    // The render surface is portrait on most devices and quarter-turned on
+    // newer iPads. Undo that hardware rotation before applying the app rotation.
+    static BOOL landscapeRenderSurface;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        landscapeRenderSurface = [getDeviceName() rangeOfString:@"^iPad(?:[89]|[1-9][0-9]+),"
+                                                       options:NSRegularExpressionSearch].location != NSNotFound;
+    });
+    BOOL frameIsRotated = frame.rotation == ZXFrameRotatedLeft || frame.rotation == ZXFrameRotatedRight;
+    BOOL swapDimensions = landscapeRenderSurface != frameIsRotated;
+    int width = swapDimensions ? frame.height : frame.width;
+    int height = swapDimensions ? frame.width : frame.height;
 
     int bytesPerElement = 4;
     int bytesPerRow = roundUp(bytesPerElement * width, 32);
@@ -184,48 +189,32 @@ OBJC_EXTERN UIImage *_UICreateScreenUIImage(void);
 
     CARenderServerRenderDisplay(0, CFSTR("LCD"), screenSurface, 0, 0);
         
-    CGImageRef cgImageRef = nil;
-    if (screenSurface) {
-        cgImageRef = UICreateCGImageFromIOSurface(screenSurface);
-        int targetWidth = CGImageGetWidth(cgImageRef);
-        int targetHeight = CGImageGetHeight(cgImageRef);
-
-        if (isiPad8orUp) // rotate 90 degrees counterclockwise
-        {
-            CGColorSpaceRef colorSpaceInfo = CGImageGetColorSpace(cgImageRef);
-            CGContextRef bitmap;
-
-            //if (sourceImage.imageOrientation == UIImageOrientationUp || sourceImage.imageOrientation == UIImageOrientationDown) {
-                bitmap = CGBitmapContextCreate(NULL, targetHeight, targetWidth, CGImageGetBitsPerComponent(cgImageRef), CGImageGetBytesPerRow(cgImageRef), colorSpaceInfo, kCGImageAlphaPremultipliedFirst);
-            //} else {
-                //bitmap = CGBitmapContextCreate(NULL, targetHeight, targetWidth, CGImageGetBitsPerComponent(cgImageRef), CGImageGetBytesPerRow(imageRef), colorSpaceInfo, bitmapInfo);
-
-            //}   
-
-            CGFloat degrees = -90.f;
-            CGFloat radians = degrees * (M_PI / 180.f);
-
-            if (bitmap) {
-                CGContextTranslateCTM (bitmap, 0.5*targetHeight, 0.5*targetWidth);
-                CGContextRotateCTM (bitmap, radians);
-                CGContextTranslateCTM (bitmap, -0.5*targetWidth, -0.5*targetHeight);
-
-                CGContextDrawImage(bitmap, CGRectMake(0, 0, targetWidth, targetHeight), cgImageRef);
-
-                CGImageRef rotatedImage = CGBitmapContextCreateImage(bitmap);
-                if (rotatedImage) {
-                    CGImageRelease(cgImageRef);
-                    cgImageRef = rotatedImage;
-                }
-                CGContextRelease(bitmap);
-            }
-        }
-    }
+    CGImageRef capture = UICreateCGImageFromIOSurface(screenSurface);
     IOSurfaceUnlock(screenSurface, 0, NULL);
     CFRelease(screenSurface);
-    screenSurface = nil;
 
-    return cgImageRef;
+    // UIImage rotation is clockwise in screen coordinates. The render surface
+    // on newer iPads needs one additional clockwise quarter turn.
+    UIImageOrientation rotation;
+    switch (frame.rotation) {
+        case ZXFrameRotatedLeft: rotation = landscapeRenderSurface ? UIImageOrientationUp : UIImageOrientationLeft; break;
+        case ZXFrameRotatedRight: rotation = landscapeRenderSurface ? UIImageOrientationDown : UIImageOrientationRight; break;
+        case ZXFrameUpsideDown: rotation = landscapeRenderSurface ? UIImageOrientationLeft : UIImageOrientationDown; break;
+        default: rotation = landscapeRenderSurface ? UIImageOrientationRight : UIImageOrientationUp; break;
+    }
+    if (!capture || rotation == UIImageOrientationUp) {
+        return capture;
+    }
+
+    UIImage *image = [UIImage imageWithCGImage:capture scale:1.0 orientation:rotation];
+    CGImageRelease(capture);
+    CGSize pixelSize = CGSizeMake(frame.width, frame.height);
+    UIGraphicsBeginImageContextWithOptions(pixelSize, YES, 1.0);
+    [image drawInRect:CGRectMake(0, 0, pixelSize.width, pixelSize.height)];
+    UIImage *orientedImage = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    CGImageRef result = orientedImage.CGImage;
+    return result ? CGImageRetain(result) : NULL;
 }
 
 

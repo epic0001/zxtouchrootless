@@ -1,5 +1,4 @@
 #import "VKOcrManager.h"
-#import "../Screen.h"
 #include "../Common.h"
 
 
@@ -18,26 +17,11 @@
 }
 
 
-- (id)initWithCIImage:(CIImage*)image area:(CGRect)aarea orientation:(int)orientation {
+- (id)initWithCGImage:(CGImageRef)cgimage area:(CGRect)aarea {
     self = [super init];
     if (self)
     {
-        int after = kCGImagePropertyOrientationUp;
-        if (orientation == 4)
-        {
-            after = kCGImagePropertyOrientationRight;
-        }
-        else if (orientation == 3)
-        {
-            after = kCGImagePropertyOrientationLeft;
-        }
-        else if (orientation == 2)
-        {
-            after = kCGImagePropertyOrientationDown;
-        }
-
-        image = [image imageByApplyingOrientation:after];
-        
+        CIImage *image = [[CIImage alloc] initWithCGImage:cgimage];
         img = image;
 
         CGFloat imageWidth = image.extent.size.width;
@@ -93,17 +77,6 @@
     return self;
 }
 
-- (id)initWithImagePath:(NSString*)path area:(CGRect)aarea orientation:(int)orientation {
-    NSURL *fileURL = [NSURL fileURLWithPath:path];
-    CIImage *image = [CIImage imageWithContentsOfURL:fileURL];
-    return [self initWithCIImage:image area:aarea orientation:orientation];
-}
-
-- (id)initWithCGImage:(CGImageRef)cgimage area:(CGRect)aarea orientation:(int)orientation {
-    CIImage *image = [[CIImage alloc] initWithCGImage:cgimage];
-    return [self initWithCIImage:image area:aarea orientation:orientation];
-}
-
 /*
 Return the string from a area
 */
@@ -138,7 +111,7 @@ Return the string from a area
         //test = [self drawTextRectangle:CGRectMake(100, 100, 100, 100) andText:@"test"];
 
         float rectWidth = (boundingBox.topRight.x - boundingBox.topLeft.x) * recognizeRect.size.width;
-        float rectHeight = abs(boundingBox.topLeft.y - boundingBox.bottomLeft.y) * recognizeRect.size.height;
+        float rectHeight = fabs(boundingBox.topLeft.y - boundingBox.bottomLeft.y) * recognizeRect.size.height;
         float rectx = boundingBox.topLeft.x * recognizeRect.size.width + recognizeRect.origin.x;
         float recty = (1 - boundingBox.topLeft.y) * recognizeRect.size.height + recognizeRect.origin.y;
 
@@ -202,10 +175,6 @@ Return area that contain text
 
 
 -(UIImage *)drawDebugOutputfromArray:(NSArray<VNRecognizedTextObservation*>*)arr error:(NSError**)error{
-    // reformat rect (don't know why there is size differnt here)
-    CGFloat scale = [Screen getScale];
-    CGRect screenBounds = [Screen getBounds];
-
     UIImage* image = [[UIImage alloc] initWithCIImage:img];
     
     CGFloat imageAbsoluteWidth = image.size.width;
@@ -214,7 +183,7 @@ Return area that contain text
     CGRect wholeImageRect = CGRectMake(0, 0, imageAbsoluteWidth, imageAbsoluteHeight);
 
     // begin a graphics context of sufficient size
-    UIGraphicsBeginImageContextWithOptions(image.size, NO, 0); // CGSizeMake(imageAbsoluteWidth, imageAbsoluteHeight)
+    UIGraphicsBeginImageContextWithOptions(image.size, NO, 1.0);
  
 	// draw original image into the context
 	[image drawInRect:wholeImageRect];
@@ -246,7 +215,7 @@ Return area that contain text
         //test = [self drawTextRectangle:CGRectMake(100, 100, 100, 100) andText:@"test"];
 
         float rectWidth = (boundingBox.topRight.x - boundingBox.topLeft.x) * recognizeRect.size.width;
-        float rectHeight = abs(boundingBox.topLeft.y - boundingBox.bottomLeft.y) * recognizeRect.size.height;
+        float rectHeight = fabs(boundingBox.topLeft.y - boundingBox.bottomLeft.y) * recognizeRect.size.height;
         float rectx = boundingBox.topLeft.x * recognizeRect.size.width + recognizeRect.origin.x;
         float recty = (1 - boundingBox.topLeft.y) * recognizeRect.size.height + recognizeRect.origin.y;
 

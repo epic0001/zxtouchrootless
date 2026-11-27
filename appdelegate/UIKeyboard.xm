@@ -1,140 +1,69 @@
 #include "UIKeyboard.h"
+#include "../pccontrol/KeyboardIPC.h"
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-#import <CoreFoundation/CFMessagePort.h>
-#import <Foundation/NSDistributedNotificationCenter.h>
-#import <execinfo.h>
-#import <mach-o/dyld.h>
-#include <substrate.h>
 
-#define INSERT_TEXT 1
-#define VIRTUAL_KEYBOARD 2
-#define MOVE_CURSOR 3
-#define DELETE_CHARACTER 4
-#define PASTE_FROM_CLIPBOARD 5
+static int gCmdToken = NOTIFY_TOKEN_INVALID;
+static int gAckToken = NOTIFY_TOKEN_INVALID;
+static int gDataTokens[ZX_KBD_DATA_SLOTS];
+static uint32_t gLastSeq = 0;
 
-#define TEST 99
-
-#define VIRTUAL_KEYBOARD_HIDE 1
-#define VIRTUAL_KEYBOARD_SHOW 2
-
-
-@interface UIKeyboardImpl : UIView
-	+ (id)sharedInstance;
-	+ (id)activeInstance;
-	- (void)insertText:(id)arg1;
-	- (void)hideKeyboard;
-    - (void)showKeyboard;
-	- (void)clearDelegate;
-	- (void)clearInput;
-	- (void)moveSelectionToEndOfWord;
-	- (void)moveCursorByAmount:(long long)arg1;
-	- (void)deleteFromInput;
-	- (void)clearSelection;
-    - (void)deleteBackward;
- 	- (void)setSelectionWithPoint:(struct CGPoint)arg1;
-    - (id)markedText;
-    - (void)unmarkText;
-    - (void)clearSelection;
-    - (void)setInputPoint:(struct CGPoint)arg1;
-    - (_Bool)hasMarkedText;
-
- 	@property (readonly, assign, nonatomic) UIResponder <UITextInput> *inputDelegate;
-@end
-
-
-%hook UIKeyboardImpl
-
-    - (id)initWithFrame:(CGRect)arg1 forCustomInputView:(UIView*)view
-    {
-        // Don't register in SpringBoard — keyboard commands are sent FROM SpringBoard, not received
-        if (![NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.apple.springboard"]) {
-            [[NSDistributedNotificationCenter defaultCenter]
-                addObserver:self selector:@selector(handleKeyboardNotification:)
-                name:@"com.zjx.zxtouch.keyboardcontrol" object:nil];
+%ctor {
+    @autoreleasepool {
+        // SpringBoard handles its own windows directly inside pccontrol.
+        NSString *bundleId = NSBundle.mainBundle.bundleIdentifier;
+        if ([bundleId isEqualToString:@"com.apple.springboard"]) {
+            return;
         }
-		return %orig;
-    }
 
-	- (id)initWithFrame:(CGRect)arg1 {
-        if (![NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.apple.springboard"]) {
-            [[NSDistributedNotificationCenter defaultCenter]
-                addObserver:self selector:@selector(handleKeyboardNotification:)
-                name:@"com.zjx.zxtouch.keyboardcontrol" object:nil];
+        notify_register_check(ZX_KBD_NOTIFY_ACK, &gAckToken);
+        for (int i = 0; i < ZX_KBD_DATA_SLOTS; i++) {
+            gDataTokens[i] = NOTIFY_TOKEN_INVALID;
+            notify_register_check(zxKbdDataSlotName(i), &gDataTokens[i]);
         }
-		return %orig;
-	}
 
-	- (void)dealloc {
-        [[NSDistributedNotificationCenter defaultCenter] removeObserver:self name:@"com.zjx.zxtouch.textinput" object:nil];
-		//NSLog(@"com.zjx.appdelegate: UIKeyboardImpl instance deallocated");
-		return %orig;
-	}
+        dispatch_queue_t queue = dispatch_queue_create("com.zjx.zxtouch.appdelegate.kbd", DISPATCH_QUEUE_SERIAL);
+        notify_register_dispatch(ZX_KBD_NOTIFY_CMD, &gCmdToken, queue, ^(int token) {
+            uint64_t cmdState = 0;
+            if (notify_get_state(token, &cmdState) != NOTIFY_STATUS_OK) return;
 
-    %new
-	- (void)handleKeyboardNotification:(NSNotification *)notification {
-		//NSLog(@"com.zjx.appdelegate: keyboard related notification received. %@", notification);
-		NSDictionary *data = (NSDictionary*)notification.userInfo;
+            uint32_t seq = 0;
+            uint8_t taskId = 0;
+            uint8_t payloadLen = 0;
+            int16_t arg16 = 0;
+            zxKbdUnpackCmd(cmdState, &seq, &taskId, &payloadLen, &arg16);
 
-        int taskId = [data[@"task_id"] intValue];
-		if (taskId == INSERT_TEXT)
-		{
-            NSString *content = data[@"task_content"] ?: @"";
+            if (seq == 0 || seq == gLastSeq) return;
+            gLastSeq = seq;
+
+            NSString *content = nil;
+            if (taskId == ZX_KBD_INSERT_TEXT && payloadLen > 0) {
+                if (payloadLen > ZX_KBD_MAX_CHUNK_BYTES) {
+                    payloadLen = ZX_KBD_MAX_CHUNK_BYTES;
+                }
+                uint8_t buf[ZX_KBD_MAX_CHUNK_BYTES];
+                memset(buf, 0, sizeof(buf));
+                int slotCount = (payloadLen + 7) / 8;
+                for (int i = 0; i < slotCount && i < ZX_KBD_DATA_SLOTS; i++) {
+                    uint64_t word = 0;
+                    notify_get_state(gDataTokens[i], &word);
+                    size_t offset = (size_t)i * 8;
+                    size_t copyLen = (payloadLen - offset < 8) ? (payloadLen - offset) : 8;
+                    memcpy(buf + offset, &word, copyLen);
+                }
+                content = [[NSString alloc] initWithBytes:buf length:payloadLen encoding:NSUTF8StringEncoding];
+                if (!content) return;
+            }
+
             dispatch_async(dispatch_get_main_queue(), ^{
-                // Try first responder directly (more reliable on iOS 16)
-                BOOL inserted = NO;
-                for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-                    if (![scene isKindOfClass:[UIWindowScene class]]) continue;
-                    for (UIWindow *win in ((UIWindowScene *)scene).windows) {
-                        UIResponder *r = [win performSelector:@selector(firstResponder)];
-                        if (r && [r respondsToSelector:@selector(insertText:)]) {
-                            [(id)r insertText:content];
-                            inserted = YES;
-                            break;
-                        }
+                @autoreleasepool {
+                    if (zxKbdPerformInCurrentProcess(taskId, content, arg16)) {
+                        notify_set_state(gAckToken, zxKbdPackAck(seq, 1));
+                        notify_post(ZX_KBD_NOTIFY_ACK);
                     }
-                    if (inserted) break;
-                }
-                // Fallback to UIKeyboardImpl
-                if (!inserted && [self respondsToSelector:@selector(insertText:)])
-                    [self insertText:content];
-            });
-		}
-        else if (taskId == VIRTUAL_KEYBOARD)
-        {
-            int status = [data[@"task_content"] intValue];
-            dispatch_async(dispatch_get_main_queue(), ^{
-                if (status == VIRTUAL_KEYBOARD_HIDE && [self respondsToSelector:@selector(hideKeyboard)])
-                    [self hideKeyboard];
-                else if (status == VIRTUAL_KEYBOARD_SHOW && [self respondsToSelector:@selector(showKeyboard)])
-                    [self showKeyboard];
-            });
-        }
-        else if (taskId == MOVE_CURSOR)
-        {
-            long long moveAmount = [data[@"task_content"] longLongValue];
-            dispatch_async(dispatch_get_main_queue(), ^{
-                if ([self respondsToSelector:@selector(moveCursorByAmount:)])
-                    [self moveCursorByAmount:moveAmount];
-            });
-        }
-        else if (taskId == DELETE_CHARACTER)
-        {
-            int n = [data[@"task_content"] intValue];
-            dispatch_async(dispatch_get_main_queue(), ^{
-                if ([self respondsToSelector:@selector(deleteBackward)]) {
-                    for (int i = 0; i < n; i++) [self deleteBackward];
                 }
             });
-        }
-        else if (taskId == PASTE_FROM_CLIPBOARD)
-        {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                if ([self respondsToSelector:@selector(insertText:)])
-                    [self insertText:[UIPasteboard generalPasteboard].string ?: @""];
-            });
-        }
-	}
-
-%end
+        });
+    }
+}

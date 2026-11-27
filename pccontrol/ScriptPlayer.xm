@@ -4,6 +4,7 @@
 #include "SocketServer.h"
 #include "Process.h"
 #include "Task.h"
+#include "Touch.h"
 #include "AlertBox.h"
 #include "Config.h"
 #include "Common.h"
@@ -394,8 +395,6 @@ static NSString *ZXPythonModulePath(void)
     }
     
     char buffer[256];
-    int taskType;
-    int sleepTime;
     
     BOOL stoppedByUser = NO;
     while (fgets(buffer, sizeof(char)*256, file) != NULL)
@@ -406,27 +405,18 @@ static NSString *ZXPythonModulePath(void)
             stoppedByUser = YES;
             break;
         }
-        if (speed > 0 && speed != 1)
-        {
-            // check whether need to speed up
-            int type, sleepTime;
-            sscanf(buffer, "%2d", &type);
-            if (type == TASK_USLEEP)
-            {
-                sscanf(buffer, "%2d%d", &type, &sleepTime);
-                sleepTime = sleepTime / speed; // truncate the float part
-                processTask((UInt8*)[[NSString stringWithFormat:@"18%d", sleepTime] UTF8String], NULL);
-            }
-            else
-            {
-                processTask((UInt8*)buffer, NULL);
-            }
+        int type;
+        if (sscanf(buffer, "%2d", &type) != 1) {
+            continue;
         }
-        else
-        {
+        if (type == TASK_PERFORM_TOUCH) {
+            performRecordedTouchFromRawData((const UInt8 *)buffer + 2);
+        } else if (type == TASK_USLEEP && speed > 0 && speed != 1) {
+            int sleepTime = (int)(atoi(buffer + 2) / speed);
+            processTask((UInt8*)[[NSString stringWithFormat:@"18%d", sleepTime] UTF8String], NULL);
+        } else {
             processTask((UInt8*)buffer, NULL);
         }
-
     }
     fclose(file);
 

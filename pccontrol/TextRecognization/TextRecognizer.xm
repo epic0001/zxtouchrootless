@@ -71,11 +71,12 @@ NSString* performTextRecognizerTextFromRawData(UInt8* eventData, NSError** error
 
         // screen shot
         CGImageRef screenshot = [Screen createScreenShotCGImageRef];
+        if (!screenshot) {
+            *error = [NSError errorWithDomain:@"com.zjx.zxtouchsp" code:999 userInfo:@{NSLocalizedDescriptionKey:@"-1;;Unable to capture screenshot for text recognition.\r\n"}];
+            return nil;
+        }
 
-        int orientation = [Screen getScreenOrientation];
-
-        // init
-        VKOcrManager* ocrManager = [[VKOcrManager alloc] initWithCGImage:screenshot area:recognizeRect orientation:orientation];
+        VKOcrManager* ocrManager = [[VKOcrManager alloc] initWithCGImage:screenshot area:recognizeRect];
 
         // set properties
         if ([customWords count] > 1 || ![customWords[0] isEqualToString:@""])

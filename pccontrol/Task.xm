@@ -319,35 +319,7 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
                     return;
                 }
 
-                UIImageOrientation imageOrientation = UIImageOrientationUp;
-                int screenOrientation = [Screen getScreenOrientation];
-                if (screenOrientation == 4) {
-                    imageOrientation = UIImageOrientationRight;
-                } else if (screenOrientation == 3) {
-                    imageOrientation = UIImageOrientationLeft;
-                } else if (screenOrientation == 2) {
-                    imageOrientation = UIImageOrientationDown;
-                }
-
-                UIImage *image = [UIImage imageWithCGImage:screenshot
-                                                     scale:[Screen getScale]
-                                               orientation:imageOrientation];
-                if (image && imageOrientation != UIImageOrientationUp) {
-                    CGFloat scale = [Screen getScale];
-                    CGSize orientedSize = CGSizeMake(CGImageGetWidth(screenshot) / scale,
-                                                     CGImageGetHeight(screenshot) / scale);
-                    if (imageOrientation == UIImageOrientationLeft ||
-                        imageOrientation == UIImageOrientationRight) {
-                        orientedSize = CGSizeMake(orientedSize.height, orientedSize.width);
-                    }
-
-                    UIGraphicsBeginImageContextWithOptions(orientedSize, YES, scale);
-                    [image drawInRect:CGRectMake(0, 0, orientedSize.width, orientedSize.height)];
-                    UIImage *orientedImage = UIGraphicsGetImageFromCurrentImageContext();
-                    UIGraphicsEndImageContext();
-                    image = orientedImage;
-                }
-
+                UIImage *image = [UIImage imageWithCGImage:screenshot];
                 NSData *jpegData = image ? UIImageJPEGRepresentation(image, 0.85) : nil;
                 if (!jpegData || [jpegData length] == 0) {
                     notifyClient((UInt8 *)"-1;;Unable to encode screenshot as JPEG\r\n", writeStreamRef);

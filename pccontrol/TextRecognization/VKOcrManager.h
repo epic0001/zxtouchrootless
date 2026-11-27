@@ -7,9 +7,7 @@
 #import <UIKit/UIKit.h>
 
 @interface VKOcrManager : NSObject
-- (id)initWithCIImage:(CIImage*)image area:(CGRect)aarea orientation:(int)orientation;
-- (id)initWithImagePath:(NSString*)path area:(CGRect)aarea orientation:(int)orientation;
-- (id)initWithCGImage:(CGImageRef)cgimage area:(CGRect)aarea orientation:(int)orientation;
+- (id)initWithCGImage:(CGImageRef)cgimage area:(CGRect)aarea;
 
 - (NSString*)recognize:(NSError**)error;
 - (NSArray*)areasOfText;

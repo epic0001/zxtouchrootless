@@ -21,22 +21,12 @@
 
 const int TOUCH_DATA_LEN = 13;
 
-static int getTouchCountFromDataArray(UInt8* dataArray);
-static int getTouchTypeFromDataArray(UInt8* dataArray, int index);
-static int getTouchIndexFromDataArray(UInt8* dataArray, int index);
-static float getTouchXFromDataArray(UInt8* dataArray, int index);
-static float getTouchYFromDataArray(UInt8* dataArray, int index);
-void performTouchFromRawData(UInt8 *eventData);
-
-static IOHIDEventRef generateChildEventTouchDown(int index, float x, float y);
-static IOHIDEventRef generateChildEventTouchMove(int index, float x, float y);
-static IOHIDEventRef generateChildEventTouchUp(int index, float x, float y);
+void performTouchFromRawData(const UInt8 *eventData);
+void performRecordedTouchFromRawData(const UInt8 *eventData);
 
 static void postIOHIDEvent(IOHIDEventRef event);
 static void setSenderIdCallback(void* target, void* refcon, IOHIDServiceRef service, IOHIDEventRef event);
 void startSetSenderIDCallBack();
 void initSenderId();
-
-void initTouchGetScreenSize();
 
 #endif

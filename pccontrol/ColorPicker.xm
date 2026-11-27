@@ -14,7 +14,12 @@ NSDictionary* getRGBFromRawData(UInt8 *eventData, NSError **error)
         return @{@"blue": @(-1), @"red": @(-1), @"green": @(-1)};
     }
     CGImageRef screen = [Screen createScreenShotCGImageRef];
-    
+    if (!screen) {
+        *error = [NSError errorWithDomain:@"com.zjx.zxtouchsp" code:999
+                                userInfo:@{NSLocalizedDescriptionKey:@"-1;;Unable to capture screenshot for color picker.\r\n"}];
+        return nil;
+    }
+
     int x = [data[0] intValue];
     int y = [data[1] intValue];
 

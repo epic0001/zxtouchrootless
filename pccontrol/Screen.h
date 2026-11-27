@@ -2,6 +2,7 @@
 #define SCREEN_H
 
 #import <UIKit/UIKit.h>
+#include "ScreenCoordinates.h"
 
 
 @interface Screen :NSObject
@@ -14,6 +15,7 @@
 + (CGFloat)getScreenWidth;
 + (CGFloat)getScreenHeight;
 + (CGFloat)getScale;
++ (ZXScreenFrame)getScreenFrame;
 + (NSString*)screenShot;
 + (CGRect)getBounds;
 + (NSString*)screenShotAlwaysUp;

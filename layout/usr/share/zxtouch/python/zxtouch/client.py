@@ -1,5 +1,6 @@
 import time
 import socket
+from operator import index
 from zxtouch import tasktypes
 from zxtouch import datahandler
 from zxtouch import kbdtasktypes
@@ -56,7 +57,7 @@ class zxtouch:
         return datahandler.decode_socket_data(self._recv_line())
 
     def screenshot(self) -> bytes:
-        """Capture the current screen and return its raw JPEG bytes over TCP."""
+        """Return the current screen as JPEG bytes at its rendered size and orientation."""
         self.s.sendall(datahandler.format_socket_data(tasktypes.TASK_SCREENSHOT))
 
         header = self._recv_line()[:-2]
@@ -84,33 +85,32 @@ class zxtouch:
         return self._recv_exact(content_length)
 
     def touch(self, type, finger_index, x, y):
-        """Perform a touch event
-
-        :param type: touch type
-        :param finger_index: which finger you want to perform touch
-        :param x: x coordinate
-        :param y: y coordinate
-        :return: None
-        """
-        if int(type) > 19:
-            print("Touch index should not be greater than 19.")
-        self.s.send(datahandler.format_socket_data(tasktypes.TASK_PERFORM_TOUCH,
-                                                   '1{}{:02d}{:05d}{:05d}'.format(type, finger_index, int(x * 10),
-                                                                                  int(y * 10))))
+        """Send one touch in pixels from the top-left of the current screen image."""
+        self.touch_with_list([{"type": type, "finger_index": finger_index, "x": x, "y": y}])
 
     def touch_with_list(self, touch_list: list):
-        """Perform touch events with a list of events
-        touch list should be a list of dictionary that you want to perform touch with following format
+        """Send simultaneous touches in the same coordinates as screenshot() and ocr()."""
+        if not 1 <= len(touch_list) <= 9:
+            raise ValueError("A touch packet must contain 1 to 9 events")
 
-        :param touch_list: [{"type": ?, "finger_index": ?, "x": ?, "y": ?}]
-        :return: None
-        """
-        event_data = ''
-        for touch_event in touch_list:
-            event_data += '{}{:02d}{:05d}{:05d}'.format(touch_event['type'], touch_event['finger_index'],
-                                                        touch_event['x'] * 10,
-                                                        touch_event['y'] * 10)
-        self.s.send(datahandler.format_socket_data(tasktypes.TASK_PERFORM_TOUCH, str(len(touch_list)) + event_data))
+        events = []
+        for event in touch_list:
+            touch_type = index(event["type"])
+            finger_index = index(event["finger_index"])
+            if touch_type not in (0, 1, 2):
+                raise ValueError("Touch type must be TOUCH_UP, TOUCH_DOWN, or TOUCH_MOVE")
+            if not 0 <= finger_index <= 19:
+                raise ValueError("Touch index must be between 0 and 19")
+            x, y = float(event["x"]), float(event["y"])
+            if not (0 <= x < 10000 and 0 <= y < 10000):
+                raise ValueError("Touch coordinates must be between 0 and 10000 pixels (exclusive)")
+
+            events.append("{:d}{:02d}{:05d}{:05d}".format(
+                touch_type, finger_index, int(x * 10), int(y * 10)
+            ))
+
+        payload = str(len(events)) + "".join(events)
+        self.s.sendall(datahandler.format_socket_data(tasktypes.TASK_PERFORM_TOUCH, payload))
 
     def switch_to_app(self, bundle_identifier):
         """Bring an application to foreground
@@ -356,7 +356,7 @@ class zxtouch:
         return self._recv_response()
 
     def get_screen_size(self):
-        """Get screen size in pixels
+        """Get the rendered screen image size in pixels in its current orientation
 
         :return: Result tuple: (success?, error_message/dictionary that stores the result)
         """
@@ -417,10 +417,10 @@ class zxtouch:
                       "battery_state_string": battery_state_list[battery_state_return]}  # state: 0 unknown, 1 unplegged, 2 charging, 3 full
 
     def ocr(self, region, custom_words=[], minimum_height="", recognition_level=0, languages=[], auto_correct=0, debug_image_path=""):
-        """Get text from a region
+        """Get text and its bounds in the same pixel coordinates as screenshot() and touch()
 
         Args:
-            region: a tuple containing start_x, start_y, width, height of the region to ocr. Format: (x, y, width, height)
+            region: (x, y, width, height) in screen image pixels. Use (0, 0, 0, 0) for the full screen.
             custom_words: an array of strings to supplement the recognized languages at the word recognition stage.
             minimum_height: the minimum height of the text expected to be recognized, relative to the image height. The default value is 1/32
             recognition_level: a value that determines whether the request prioritizes accuracy or speed in text recognition. 0 means accurate. 1 means faster.

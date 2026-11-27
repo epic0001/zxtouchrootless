@@ -187,7 +187,7 @@ device = zxtouch("127.0.0.1")  # use device IP for remote control
 
 ## Touch
 
-Two methods for sending touch events.
+`touch()` and `touch_with_list()` use pixels from the top-left of the current screen image, in the same orientation and resolution as `screenshot()` and `ocr()`. `get_screen_size()` returns that image's width and height. For example, on an iPhone 8 Plus in portrait, pass coordinates from the 1242×2208 image directly. Remove any manual screen-to-touch scaling or rotation in existing scripts. If the app rotates after a screenshot or OCR call, locate the target again before tapping.
 
 ```python
 def touch(type, finger_index, x, y):
@@ -521,7 +521,7 @@ def move_cursor(offset):
 
 ```python
 def get_screen_size():
-    """Get screen size in pixels
+    """Get the rendered screen image size in pixels in its current orientation
 	
     Returns:
         Result tuple. On success, result[1] is {"width", "height"}
@@ -532,7 +532,7 @@ def get_screen_size():
 
 ## Screenshot
 
-`screenshot()` returns the current display as raw JPEG bytes directly over the
+`screenshot()` returns the current display as raw JPEG bytes at the device’s rendered size and in the current app orientation. It sends the image directly over the
 existing ZXTouch TCP connection. No file is created on the iOS device and SSH
 is not required. Pillow is optional and is only needed if your own code wants
 to decode the returned JPEG.
@@ -644,6 +644,19 @@ def stop_touch_recording():
 ---
 
 ## OCR
+
+The region and returned bounds use screen image pixels, with the origin at the top left of the full image. Use `(0, 0, 0, 0)` to recognize the whole screen. Pass a point from the result directly to `touch()`. To tap the center of a result, convert its coordinate strings to numbers first.
+
+```python
+ok, results = device.ocr((0, 0, 0, 0), languages=["en-US"])
+if ok:
+    key = next((item for item in results if item["text"].strip() == "R0"), None)
+    if key:
+        x = float(key["x"]) + float(key["width"]) / 2
+        y = float(key["y"]) + float(key["height"]) / 2
+        device.touch(TOUCH_DOWN, 1, x, y)
+        device.touch(TOUCH_UP, 1, x, y)
+```
 
 ```python
 def ocr(self, region, custom_words=[], minimum_height="", recognition_level=0, languages=[], auto_correct=0, debug_image_path=""):

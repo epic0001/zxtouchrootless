@@ -330,18 +330,33 @@ class zxtouch:
         """Insert text into the text field
 
         :param text: text to insert
-        :return:
+        :return: Result tuple: (success?, error_message)
         """
-        for i, ch in enumerate(text):
-            if ch == "\b":
+        if not text:
+            return True, ""
+
+        i = 0
+        n = len(text)
+        while i < n:
+            if text[i] == "\b":
+                start = i
+                while i < n and text[i] == "\b":
+                    i += 1
+                count = i - start
                 self.s.send(
                     datahandler.format_socket_data(tasktypes.TASK_KEYBOARDIMPL, kbdtasktypes.KEYBOARD_DELETE_CHARACTERS,
-                                                   1))
-                self._recv_response()
+                                                   count))
             else:
+                start = i
+                while i < n and text[i] != "\b":
+                    i += 1
+                chunk = text[start:i]
                 self.s.send(
-                    datahandler.format_socket_data(tasktypes.TASK_KEYBOARDIMPL, kbdtasktypes.KEYBOARD_INSERT_TEXT, ch))
-                self._recv_response()
+                    datahandler.format_socket_data(tasktypes.TASK_KEYBOARDIMPL, kbdtasktypes.KEYBOARD_INSERT_TEXT,
+                                                   chunk))
+            result = self._recv_response()
+            if not result[0]:
+                return False, result[1]
         return True, ""
 
 
